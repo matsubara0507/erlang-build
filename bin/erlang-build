@@ -96,6 +96,10 @@ install_git() {
   install_package_using "git" 2 $*
 }
 
+install_git_with_history() {
+  install_package_using "git_with_history" 2 $*
+}
+
 install_package_using() {
   local package_type="$1"
   local package_type_nargs="$2"
@@ -141,6 +145,12 @@ fetch_tarball() {
   echo "Downloading ${package_url}..." >&2
   { fetch_url "$package_url" > "${package_name}.tar.gz"
     tar xzvf "${package_name}.tar.gz"
+    # Handle the case where we fetch a tarball from GitHub, and
+    # it contains an innner package with the SHA1 of the release commit
+    if test -n "$(find "$BUILD_PATH" -maxdepth 1 -name 'erlang-otp-*' -print -quit)"; then
+      ls -la "$BUILD_PATH"
+      mv erlang-otp-* "$package_name"
+    fi
   } >&4 2>&1
 }
 
@@ -153,6 +163,21 @@ fetch_git() {
 
   if type git &>/dev/null; then
     git clone --depth 1 --branch "$git_ref" "$git_url" "${package_name}" >&4 2>&1
+  else
+    echo "error: please install \`git\` and try again" >&2
+    exit 1
+  fi
+}
+
+fetch_git_with_history() {
+  local package_name="$1"
+  local git_url="$2"
+  local git_ref="$3"
+
+  echo "Cloning ${git_url}..." >&2
+
+  if type git &>/dev/null; then
+    git clone --branch "$git_ref" "$git_url" "${package_name}" >&4 2>&1
   else
     echo "error: please install \`git\` and try again" >&2
     exit 1
@@ -179,14 +204,16 @@ build_package() {
 build_package_standard() {
   local package_name="$1"
 
-  ./configure --prefix="$PREFIX_PATH"
-
   if [ "${MAKEOPTS+defined}" ]; then
     MAKE_OPTS="$MAKEOPTS"
   elif [ -z "${MAKE_OPTS+defined}" ]; then
     MAKE_OPTS="-j 2"
   fi
 
+  if [ ! -e "./configure" ]; then
+    ./otp_build autoconf
+  fi
+  ./configure --prefix="$PREFIX_PATH"
   { make && make install
   } >&4 2>&1
 }
@@ -218,13 +245,51 @@ usage() {
   fi
 }
 
-list_definitions() {
+list_custom_definitions() {
   { for definition in "${ERLANG_BUILD_ROOT}/share/erlang-build/"*; do
       echo "${definition##*/}"
     done
   } | sort
 }
 
+list_definitions() {
+  {
+    local items=()
+    if type curl &>/dev/null; then
+      for i in $(curl -s https://api.github.com/repos/erlang/otp/git/refs/tags | ${ERLANG_BUILD_ROOT}/bin/json | egrep '\[[0-9]+,"ref"\][[:space:]]*"refs/tags/OTP-' | tr "\t" "\n"); do
+        items+=($i)
+      done
+    elif type wget &>/dev/null; then
+      for i in $(wget -q -O - https://api.github.com/repos/erlang/otp/git/refs/tags | ${ERLANG_BUILD_ROOT}/bin/json | egrep '\[[0-9]+,"ref"\][[:space:]]*"refs/tags/OTP-' | tr "\t" "\n"); do
+        items+=($i)
+      done
+    else
+      echo "error: please install \`curl\` or \`wget\` and try again" >&2
+      exit 1
+    fi
+
+    items_len=${#items[@]}
+    for ((i=1;i<=$items_len;i+=2)); do
+      local release_url=$(echo ${items[i]} | sed 's/\"//g')
+      echo "$(parse_release_version "$release_url")"
+    done
+  } | sort -r
+}
+
+parse_release_version() {
+  local release_url="$1"
+  echo "$(echo "$release_url" | sed 's/refs\/tags\/OTP-//')"
+}
+
+is_defined() {
+  local version="$1"
+  for def in $(list_definitions); do
+    if [ "$def" == "$version" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 
 unset VERBOSE
@@ -247,6 +312,7 @@ for option in "${OPTIONS[@]}"; do
     ;;
   "definitions" )
     list_definitions
+    list_custom_definitions
     exit 0
     ;;
   "k" | "keep" )
@@ -262,6 +328,7 @@ for option in "${OPTIONS[@]}"; do
   esac
 done
 
+IS_REMOTE_DEFINITION=0
 DEFINITION_PATH="${ARGUMENTS[0]}"
 if [ -z "$DEFINITION_PATH" ]; then
   usage
@@ -270,8 +337,17 @@ elif [ ! -e "$DEFINITION_PATH" ]; then
   if [ -e "$BUILTIN_DEFINITION_PATH" ]; then
     DEFINITION_PATH="$BUILTIN_DEFINITION_PATH"
   else
-    echo "erlang-build: definition not found: ${DEFINITION_PATH}" >&2
-    exit 1
+    # Check if there is a release with this definition
+    is_defined $DEFINITION_PATH
+    case $? in
+      0)
+        IS_REMOTE_DEFINITION=1
+        ;;
+      *)
+        echo "erlang-build: definition not found: ${DEFINITION_PATH}" >&2
+        exit 1
+        ;;
+    esac
   fi
 fi
 
@@ -309,7 +385,13 @@ unset ERLANGLIB
 echo $BUILD_PATH
 
 trap build_failed ERR
-mkdir -p "$BUILD_PATH"
-source "$DEFINITION_PATH"
+if [ $IS_REMOTE_DEFINITION -eq 1 ]; then
+  mkdir -p "$BUILD_PATH"
+  DEFINITION_NAME="${DEFINITION_PATH##*/}"
+  install_package "OTP-${DEFINITION_NAME}" "https://api.github.com/repos/erlang/otp/tarball/OTP-${DEFINITION_NAME}"
+else
+  mkdir -p "$BUILD_PATH"
+  source "$DEFINITION_PATH"
+fi
 [ -z "${KEEP_BUILD_PATH}" ] && rm -fr "$BUILD_PATH"
 trap - ERR

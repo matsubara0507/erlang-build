@@ -13,7 +13,8 @@ RUN apt-get update \
     libssl-dev \
     fop \
     xsltproc \
-    unixodbc-dev
+    unixodbc-dev \
+    autoconf 
 
 RUN git clone https://github.com/talentdeficit/erlenv.git .erlenv
 RUN echo 'export PATH="$HOME/.erlenv/bin:$PATH"' >> ~/.bashrc

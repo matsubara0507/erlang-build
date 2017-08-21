@@ -1,0 +1,1 @@
+install_git_with_history "erlang-dev" "https://github.com/erlang/otp.git" "master"
