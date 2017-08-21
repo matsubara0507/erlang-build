@@ -1,5 +1,7 @@
 # CHANGELOG
 
+## v20170822
+
 * Get releases from tags of github repository.
 * Remove function for SVN
 * Fix path of erlang on uninstall shell script

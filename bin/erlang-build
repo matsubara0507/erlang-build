@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-ERLANG_BUILD_VERSION="20170821"
+ERLANG_BUILD_VERSION="20170822"
 
 set -E
 exec 3<&2 # preserve original stderr at fd 3
